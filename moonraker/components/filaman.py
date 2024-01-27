@@ -39,6 +39,8 @@ BUS_REGISTERS = {
 
 BUS_REG_OPT_START = BUS_REGISTERS['opt_bitmap']['reg']+1
 
+FILAMENT_CHANGED_NOTIF = "filaman:filament_changed"
+
 class FilaMan:
     def __init__(self, config: ConfigHelper):
         self.server = config.get_server()
@@ -52,12 +54,12 @@ class FilaMan:
 
         # Required config
         self.dev_addr = config.getint("dev_address")
-        self.int_pin = config.get("int_pin", None)
+        config.getgpioevent("int_pin", self._on_int_event)
 
         self._register_i2c()
-        if self.int_pin != None:
-            self._register_gpio()
         self._register_endpoints()
+
+        self.server.register_notification(FILAMENT_CHANGED_NOTIF)
 
     def _check_i2c_dev(self, addr):
         try:
@@ -68,9 +70,6 @@ class FilaMan:
     def _register_i2c(self):
         self.bus = SMBus(self.smbus_id)
         self._check_i2c_dev(self.dev_addr)
-
-    def _register_gpio(self):
-        self.config.getgpioevent(self.int_pin, self._on_int_event)
 
     def _register_endpoints(self):
         self.server.register_endpoint("/server/filaman/status", ['GET'],
@@ -91,10 +90,16 @@ class FilaMan:
         self._write_nfc(data)
         return {"status": "OK"}
 
+    def _notify_filament_changed(self):
+        filament_info = self.status
+        if filament_info['present'] and filament_info['nfc_valid']:
+            filament_info = dict(filament_info, **self._read_nfc())
+        self.server.send_event(FILAMENT_CHANGED_NOTIF, filament_info)
+
     async def _on_int_event(
         self, eventtime: float, elapsed_time: float, pressed: int
-    ) -> None:
-        self._read_status(self)
+        ):
+        self._notify_filament_changed()
 
     def _read_status(self):
         self.status['present'] = self._read_register(BUS_REGISTERS['present'])
